@@ -42,6 +42,9 @@ msgstr "传感器"
 msgid "Show hidden sensors"
 msgstr "显示已隐藏的传感器"
 
+msgid "Switch view"
+msgstr "切换视图"
+
 msgid "Temperature"
 msgstr "温度"
 
