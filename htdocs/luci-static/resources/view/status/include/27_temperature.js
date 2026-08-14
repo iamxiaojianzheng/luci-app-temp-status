@@ -81,6 +81,7 @@ document.head.append(E('style', {'type': 'text/css'},
 
 #temp-status-buttons-wrapper {
 	margin-bottom: 1em;
+	margin-left: 1em;
 }
 .temp-status-button {
 	display: inline-block;
