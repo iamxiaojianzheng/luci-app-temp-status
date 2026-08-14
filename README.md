@@ -8,19 +8,31 @@ OpenWrt >= 22.03.
 
 ## Installation notes
 
-```ash
-wget --no-check-certificate -O /tmp/luci-app-temp-status_0.7.1-r2_all.ipk https://github.com/iamxiaojianzheng/luci-app-temp-status/releases/download/v0.7.1/luci-app-temp-status_0.7.1-r2_all.ipk
-opkg install /tmp/luci-app-temp-status_0.7.1-r2_all.ipk
-rm /tmp/luci-app-temp-status_0.7.1-r2_all.ipk
-service rpcd restart
-```
+**OpenWrt >= 25.12:**
 
-i18n:
-```ash
-wget --no-check-certificate -O /tmp/luci-i18n-temp-status-zh-cn_25.198.41255.2bcbe17_all.ipk https://github.com/iamxiaojianzheng/luci-app-temp-status/releases/download/v0.7.1/luci-i18n-temp-status-zh-cn_25.198.41255.2bcbe17_all.ipk
-opkg install /tmp/luci-i18n-temp-status-zh-cn_25.198.41255.2bcbe17_all.ipk
-rm /tmp/luci-i18n-temp-status-zh-cn_25.198.41255.2bcbe17_all.ipk
-```
+    wget --no-check-certificate -O /tmp/luci-app-temp-status-0.8.1-r1.apk https://github.com/gSpotx2f/packages-openwrt/raw/master/25.12/luci-app-temp-status-0.8.1-r1.apk
+    apk --allow-untrusted add /tmp/luci-app-temp-status-0.8.1-r1.apk
+    rm /tmp/luci-app-temp-status-0.8.1-r1.apk
+    service rpcd restart
+
+i18n-ru:
+
+    wget --no-check-certificate -O /tmp/luci-i18n-temp-status-ru-0.8.1-r1.apk https://github.com/gSpotx2f/packages-openwrt/raw/master/25.12/luci-i18n-temp-status-ru-0.8.1-r1.apk
+    apk --allow-untrusted add /tmp/luci-i18n-temp-status-ru-0.8.1-r1.apk
+    rm /tmp/luci-i18n-temp-status-ru-0.8.1-r1.apk
+
+**OpenWrt <= 24.10:**
+
+    wget --no-check-certificate -O /tmp/luci-app-temp-status_0.8.1-r1_all.ipk https://github.com/gSpotx2f/packages-openwrt/raw/master/24.10/luci-app-temp-status_0.8.1-r1_all.ipk
+    opkg install /tmp/luci-app-temp-status_0.8.1-r1_all.ipk
+    rm /tmp/luci-app-temp-status_0.8.1-r1_all.ipk
+    service rpcd restart
+
+i18n-ru:
+
+    wget --no-check-certificate -O /tmp/luci-i18n-temp-status-ru_0.8.1-r1_all.ipk https://github.com/gSpotx2f/packages-openwrt/raw/master/24.10/luci-i18n-temp-status-ru_0.8.1-r1_all.ipk
+    opkg install /tmp/luci-i18n-temp-status-ru_0.8.1-r1_all.ipk
+    rm /tmp/luci-i18n-temp-status-ru_0.8.1-r1_all.ipk
 
 ## Screenshots:
 
