@@ -1,71 +1,218 @@
-name: Build and Release IPK & APK Packages
+name: Build and Release OpenWrt Packages
 
 on:
   push:
+    branches:
+      - main
+      - master
     tags:
-      - 'v*'
+      - "v*"
   workflow_dispatch:
 
+env:
+  TZ: Asia/Shanghai
+  PKG_NAME: luci-app-temp-status
+
+permissions:
+  contents: write
+
 jobs:
-  build:
-    name: Build (${{ matrix.sdk }})
+  job_check:
+    name: Check Version
+    runs-on: ubuntu-latest
+    outputs:
+      latest_version: ${{ steps.check_version.outputs.latest_version }}
+      has_update: ${{ steps.check_version.outputs.has_update }}
+      release_tag: ${{ steps.check_version.outputs.release_tag }}
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Check Makefile Version
+        id: check_version
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          latest_version=$(awk -F ':=' '/^PKG_VERSION:=/ {print $2}' Makefile | tr -d ' \r\n')
+          echo "latest_version=${latest_version}" >> $GITHUB_OUTPUT
+
+          target_tag="v${latest_version}"
+          echo "release_tag=${target_tag}" >> $GITHUB_OUTPUT
+
+          if [[ "${{ github.ref }}" == refs/tags/* ]]; then
+            echo "Triggered by tag, proceed with build."
+            echo "has_update=true" >> $GITHUB_OUTPUT
+            exit 0
+          fi
+
+          remote_latest_version=$(curl -sH "Authorization: token $GITHUB_TOKEN" "https://api.github.com/repos/${{ github.repository }}/releases/latest" | jq -r '.tag_name // empty')
+          echo "Remote latest release tag: $remote_latest_version"
+
+          if [ "$remote_latest_version" = "$target_tag" ]; then
+            echo "Version $target_tag already released."
+            echo "has_update=false" >> $GITHUB_OUTPUT
+          else
+            echo "New version $target_tag detected or release missing."
+            echo "has_update=true" >> $GITHUB_OUTPUT
+          fi
+
+  job_build:
+    name: Build Packages (${{ matrix.package_format }})
+    needs: job_check
+    if: needs.job_check.outputs.has_update == 'true'
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
       matrix:
-        sdk:
-          - x86_64-23.05
-          - x86_64-snapshots
+        include:
+          - package_format: ipk
+            sdk_base_url: https://downloads.openwrt.org/releases/24.10.1/targets/x86/64
+          - package_format: apk
+            sdk_base_url: https://downloads.openwrt.org/snapshots/targets/x86/64
 
     steps:
-      - name: Checkout Source Code
+      - name: Checkout Code
         uses: actions/checkout@v4
 
-      - name: Build Package via OpenWrt SDK (${{ matrix.sdk }})
-        uses: sbwml/openwrt-gh-action-sdk@main
-        env:
-          ARCH: ${{ matrix.sdk }}
-          PACKAGES: luci-app-temp-status
-          NO_EXTRA_IPKS: true
-
-      - name: Collect Artifacts
+      - name: Install Build Dependencies
         run: |
-          mkdir -p output_packages
-          find bin/packages/ -type f \( -name "*.ipk" -o -name "*.apk" \) -exec cp {} output_packages/ \;
-          echo "=== Compiled Packages (${{ matrix.sdk }}) ==="
-          ls -la output_packages/
+          sudo -E apt-get update
+          sudo -E apt-get install -y \
+            build-essential bison clang curl file flex g++ gawk gcc gettext git \
+            libncurses-dev libssl-dev python3 rsync unzip wget xz-utils zlib1g-dev zstd
 
-      - name: Upload Single Build Artifact
+      - name: Download & Extract OpenWrt SDK
+        env:
+          SDK_BASE_URL: ${{ matrix.sdk_base_url }}
+        run: |
+          sdk_file="$(curl -fsSL "${SDK_BASE_URL}/" | grep -oE 'openwrt-sdk-[^"'\'' <>]+\.tar\.(xz|zst)' | head -n 1)"
+          if [ -z "${sdk_file}" ]; then
+            sdk_file="$(curl -fsSL "${SDK_BASE_URL}/sha256sums" | grep -oE 'openwrt-sdk-[^"'\'' <>]+\.tar\.(xz|zst)' | head -n 1)"
+          fi
+
+          if [ -z "${sdk_file}" ]; then
+            echo "::error::Failed to resolve SDK file in ${SDK_BASE_URL}"
+            exit 1
+          fi
+
+          echo "Downloading SDK: ${sdk_file}"
+          curl -fL "${SDK_BASE_URL}/${sdk_file}" -o "${sdk_file}"
+
+          mkdir -p sdk
+          case "${sdk_file}" in
+            *.tar.zst)
+              tar --zstd -xf "${sdk_file}" -C sdk --strip-components=1
+              ;;
+            *.tar.xz)
+              tar -xJf "${sdk_file}" -C sdk --strip-components=1
+              ;;
+          esac
+
+      - name: Prepare Feeds & Local Package
+        run: |
+          cd sdk
+          cp feeds.conf.default feeds.conf
+          
+          # 1. 更新索引并安装 ucode 依赖及 luci 架构
+          ./scripts/feeds update packages luci
+          ./scripts/feeds install ucode ucode-mod-fs
+          ./scripts/feeds install luci-base luci-compat
+          # 2. 复制你的源码到 SDK package 目录（使用 clean rsync 避免把 sdk 自己递归复制进去）
+          mkdir -p package/${{ env.PKG_NAME }}
+          rsync -a --exclude='sdk' --exclude='.git' "${GITHUB_WORKSPACE}/" "package/${{ env.PKG_NAME }}/"
+
+      - name: Configure .config
+        working-directory: sdk
+        run: |
+          # 仅勾选你的插件和需要构建的语言包
+          cat > .config <<EOF
+          CONFIG_PACKAGE_${{ env.PKG_NAME }}=m
+          CONFIG_ALL_KMODS=n
+          CONFIG_ALL_PACKAGES=n
+          CONFIG_LUCI_LANG_zh_Hans=y
+          CONFIG_LUCI_LANG_ru=y
+          CONFIG_LUCI_LANG_es=y
+          CONFIG_PACKAGE_golang=n
+          EOF
+          make defconfig
+
+      - name: Compile Package
+        working-directory: sdk
+        run: |
+          # Compile po2lmo host tool
+          make tools/po2lmo/compile V=s || true
+          
+          # Compile luci-base host tools
+          make package/feeds/luci/luci-base/host-compile V=s || true
+          
+          # Compile your plugin package only
+          make package/${{ env.PKG_NAME }}/compile -j$(nproc) V=s 2>&1 | tee build.log
+          
+          # Check if compilation succeeded
+          if [ ${PIPESTATUS[0]} -ne 0 ]; then
+            echo "Build failed. Last 50 lines of output:"
+            tail -n 50 build.log
+            exit 1
+          fi
+    
+      - name: Collect & Normalize Artifacts
+        run: |
+          mkdir -p upload_dir
+          find sdk/bin/packages -type f \( -name "${{ env.PKG_NAME }}*" -o -name "luci-i18n-temp-status*" \) -exec cp {} upload_dir/ \;
+
+          cd upload_dir
+          shopt -s nullglob
+          files=(*)
+          if [ ${#files[@]} -eq 0 ]; then
+            echo "::error::No compiled packages found!"
+            exit 1
+          fi
+
+          for file in "${files[@]}"; do
+            if [[ -f "$file" ]] && [[ ! "$file" =~ _all\. ]]; then
+              filename="${file%.*}"
+              extension="${file##*.}"
+              mv "$file" "${filename}_all.${extension}"
+              echo "Renamed: $file -> ${filename}_all.${extension}"
+            fi
+          done
+
+      - name: Upload Artifacts Temporarily
         uses: actions/upload-artifact@v4
         with:
-          name: packages-${{ matrix.sdk }}
-          path: output_packages/*
+          name: packages-${{ matrix.package_format }}
+          path: upload_dir/*
 
-  release:
+  job_release:
     name: Create GitHub Release
-    needs: build
+    needs: [job_check, job_build]
     runs-on: ubuntu-latest
-    permissions:
-      contents: write
-    if: startsWith(github.ref, 'refs/tags/')
-
     steps:
       - name: Download All Artifacts
         uses: actions/download-artifact@v4
         with:
           path: all_packages
 
-      - name: Consolidate Release Packages
+      - name: Prepare Release Directory
         run: |
           mkdir -p release_files
-          find all_packages/ -type f \( -name "*.ipk" -o -name "*.apk" \) -exec cp {} release_files/ \;
-          echo "=== Final Release Package List ==="
+          find all_packages -type f -exec cp {} release_files/ \;
           ls -la release_files/
 
-      - name: Create Release and Upload IPK & APK
+      - name: Generate Release Notes
+        run: |
+          echo "Automated OpenWrt build release for version ${{ needs.job_check.outputs.latest_version }}." > release_notes.txt
+          echo "" >> release_notes.txt
+          echo "Includes both **IPK** (OpenWrt <= 24.10) and **APK** (OpenWrt >= 25.12) packages." >> release_notes.txt
+
+      - name: Publish Release
         uses: softprops/action-gh-release@v2
-        with:
-          files: release_files/*
-          generate_release_notes: true
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          tag_name: ${{ needs.job_check.outputs.release_tag }}
+          body_path: release_notes.txt
+          files: release_files/*
+          prerelease: false
